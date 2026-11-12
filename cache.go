@@ -6,15 +6,22 @@ import (
 	"sync"
 )
 
-var fieldCache sync.Map // map[typeKey][]field
+var fieldCache sync.Map // map[typeKey]*fieldPlan
 
-func cachedFields(k typeKey) fields {
+type fieldPlan struct {
+	fields    fields
+	conflicts []FieldConflict
+}
+
+func cachedFields(k typeKey) (fields, error) {
 	if v, ok := fieldCache.Load(k); ok {
-		return v.(fields)
+		plan := v.(*fieldPlan)
+		return plan.fields, fieldConflictError(plan.conflicts)
 	}
 
 	v, _ := fieldCache.LoadOrStore(k, buildFields(k))
-	return v.(fields)
+	plan := v.(*fieldPlan)
+	return plan.fields, fieldConflictError(plan.conflicts)
 }
 
 type field struct {
@@ -23,6 +30,7 @@ type field struct {
 	typ      reflect.Type
 	tag      tag
 	index    []int
+	path     string
 }
 
 type fields []field
@@ -32,9 +40,13 @@ func (fs fields) Len() int { return len(fs) }
 func (fs fields) Swap(i, j int) { fs[i], fs[j] = fs[j], fs[i] }
 
 func (fs fields) Less(i, j int) bool {
-	for k, n := range fs[i].index {
-		if n != fs[j].index[k] {
-			return n < fs[j].index[k]
+	shortest := len(fs[i].index)
+	if len(fs[j].index) < shortest {
+		shortest = len(fs[j].index)
+	}
+	for k := 0; k < shortest; k++ {
+		if fs[i].index[k] != fs[j].index[k] {
+			return fs[i].index[k] < fs[j].index[k]
 		}
 	}
 	return len(fs[i].index) < len(fs[j].index)
@@ -48,45 +60,71 @@ type typeKey struct {
 type fieldMap map[string]fields
 
 func (m fieldMap) insert(f field) {
-	fs, ok := m[f.name]
-	if !ok {
-		m[f.name] = append(fs, f)
-		return
-	}
-
-	// insert only fields with the shortest path.
-	if len(fs[0].index) != len(f.index) {
-		return
-	}
-
-	// fields that are tagged have priority.
-	if !f.tag.empty {
-		m[f.name] = append([]field{f}, fs...)
-		return
-	}
-
-	m[f.name] = append(fs, f)
+	m[f.name] = append(m[f.name], f)
 }
 
-func (m fieldMap) fields() fields {
+func (m fieldMap) plan() *fieldPlan {
 	out := make(fields, 0, len(m))
-	for _, v := range m {
-		for i, f := range v {
-			if f.tag.empty != v[0].tag.empty {
-				v = v[:i]
-				break
+	conflicts := make([]FieldConflict, 0)
+
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		candidates := m[name]
+		explicit := make(fields, 0, len(candidates))
+		implicit := make(fields, 0, len(candidates))
+		for _, f := range candidates {
+			if f.tag.empty {
+				implicit = append(implicit, f)
+			} else {
+				explicit = append(explicit, f)
 			}
 		}
-		if len(v) > 1 {
+
+		chosen := implicit
+		if len(explicit) > 0 {
+			chosen = explicit
+		}
+
+		shortestDepth := len(chosen[0].index)
+		for _, f := range chosen[1:] {
+			if len(f.index) < shortestDepth {
+				shortestDepth = len(f.index)
+			}
+		}
+
+		shortest := make(fields, 0, len(chosen))
+		for _, f := range chosen {
+			if len(f.index) == shortestDepth {
+				shortest = append(shortest, f)
+			}
+		}
+		sort.Sort(shortest)
+
+		if len(shortest) > 1 {
+			paths := make([]string, len(shortest))
+			for i, f := range shortest {
+				paths[i] = f.path
+			}
+			conflicts = append(conflicts, FieldConflict{
+				Column: name,
+				Paths:  paths,
+			})
 			continue
 		}
-		out = append(out, v[0])
+
+		out = append(out, shortest[0])
 	}
+
 	sort.Sort(out)
-	return out
+	return &fieldPlan{fields: out, conflicts: conflicts}
 }
 
-func buildFields(k typeKey) fields {
+func buildFields(k typeKey) *fieldPlan {
 	type key struct {
 		reflect.Type
 		tag
@@ -147,6 +185,7 @@ func buildFields(k typeKey) fields {
 				typ:      ft,
 				tag:      tag,
 				index:    makeIndex(f.index, i),
+				path:     joinFieldPath(f.path, sf.Name),
 			}
 
 			if sf.Anonymous && ft.Kind() == reflect.Struct && tag.empty {
@@ -175,16 +214,31 @@ func buildFields(k typeKey) fields {
 						typ:      ft,
 						tag:      tag,
 						index:    makeIndex(v.index, i),
+						path:     joinFieldPath(v.path, sf.Name),
 					})
 				}
 			}
 		}
 	}
-	return fm.fields()
+	return fm.plan()
 }
 
 func makeIndex(index []int, v int) []int {
 	out := make([]int, len(index), len(index)+1)
 	copy(out, index)
 	return append(out, v)
+}
+
+func joinFieldPath(parent, name string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + "." + name
+}
+
+func fieldConflictError(conflicts []FieldConflict) error {
+	if len(conflicts) == 0 {
+		return nil
+	}
+	return &FieldConflictError{Conflicts: conflicts}
 }

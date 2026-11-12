@@ -1,7 +1,6 @@
 package csvutil
 
 import (
-	"errors"
 	"io"
 	"reflect"
 )
@@ -85,6 +84,8 @@ type ifaceDecodeFunc struct {
 // If header is empty NewDecoder will read one line and treat it as a header.
 //
 // Records coming from r must be of the same length as the header.
+// NewDecoder returns DuplicateHeaderError if the header contains the same
+// column name more than once.
 //
 // NewDecoder may return io.EOF if there is no data in r and no header was
 // provided by the caller.
@@ -101,8 +102,16 @@ func NewDecoder(r Reader, header ...string) (dec *Decoder, err error) {
 	header = h
 
 	m := make(map[string]int, len(header))
+	positions := make(map[string][]int, len(header))
 	for i, h := range header {
 		m[h] = i
+		positions[h] = append(positions[h], i+1)
+	}
+
+	for _, h := range header {
+		if len(positions[h]) > 1 {
+			return nil, &DuplicateHeaderError{Column: h, Positions: positions[h]}
+		}
 	}
 
 	return &Decoder{
@@ -165,6 +174,10 @@ func NewDecoder(r Reader, header ...string) (dec *Decoder, err error) {
 // priority and they are populated first. If main struct and anonymous struct
 // field have the same fields, the main struct's fields will be populated.
 //
+// If multiple fields with the same name cannot be resolved by tag or path
+// depth priority, Decode returns a FieldConflictError instead of choosing one
+// field silently.
+//
 // Fields of type []byte expect the data to be base64 encoded strings.
 //
 // Float fields are decoded to NaN if a string value is 'NaN'. This check
@@ -224,22 +237,30 @@ func (d *Decoder) Header() []string {
 	return header
 }
 
-// NormalizeHeader applies f to every column in the header. It returns error
-// if calling f results in conflicting header columns.
+// NormalizeHeader applies f to every column in the header. It returns
+// DuplicateHeaderError if calling f results in conflicting header columns.
 //
 // NormalizeHeader must be called before Decode.
 func (d *Decoder) NormalizeHeader(f func(string) string) error {
 	set := make(map[string]int, len(d.header))
+	positions := make(map[string][]int, len(d.header))
 	for i, s := range d.header {
-		set[f(s)] = i
+		normalized := f(s)
+		set[normalized] = i
+		positions[normalized] = append(positions[normalized], i+1)
 	}
 
 	if len(set) != len(d.header) {
-		return errors.New("csvutil: normalize header results in conflicting columns")
+		for _, s := range d.header {
+			normalized := f(s)
+			if len(positions[normalized]) > 1 {
+				return &DuplicateHeaderError{Column: normalized, Positions: positions[normalized]}
+			}
+		}
 	}
 
-	for s, i := range set {
-		d.header[i] = s
+	for i, s := range d.header {
+		d.header[i] = f(s)
 	}
 	d.hmap = set
 	return nil
@@ -520,11 +541,14 @@ func (d *Decoder) fields(k typeKey) ([]decField, error) {
 	}
 
 	var (
-		fields      = cachedFields(k)
+		fields, err = cachedFields(k)
 		decFields   = make([]decField, 0, len(fields))
 		used        = make([]bool, len(d.header))
 		missingCols []string
 	)
+	if err != nil {
+		return nil, err
+	}
 	for _, f := range fields {
 		i, ok := d.hmap[f.name]
 		if !ok {

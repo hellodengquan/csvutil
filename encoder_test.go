@@ -337,10 +337,10 @@ func TestEncoder(t *testing.T) {
 					Int: 10,
 				},
 			},
-			out: [][]string{
-				{"string", "bool", "int"},
-				{"string", "true", "10"},
-			},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "float",
+				Paths:  []string{"Embedded1.Float", "Embedded2.Float"},
+			}}},
 		},
 		{
 			desc: "embedded non struct tagged types",
@@ -494,10 +494,10 @@ func TestEncoder(t *testing.T) {
 					},
 				},
 			},
-			out: [][]string{
-				{"Y"},
-				{"91"},
-			},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "X",
+				Paths:  []string{"Embedded6.X", "Embedded7.X"},
+			}}},
 		},
 		{
 			desc: "conflicting embedded fields #2",
@@ -519,10 +519,10 @@ func TestEncoder(t *testing.T) {
 					},
 				},
 			},
-			out: [][]string{
-				{"Y"},
-				{"91"},
-			},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "X",
+				Paths:  []string{"Embedded11.Embedded6.X", "Embedded12.Embedded6.X"},
+			}}},
 		},
 		{
 			desc: "double pointer",
@@ -749,10 +749,10 @@ func TestEncoder(t *testing.T) {
 					},
 				},
 			},
-			out: [][]string{
-				{"AS", "AAA", "S", "A"},
-				{"1", "11", "2", "22"},
-			},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "AA",
+				Paths:  []string{"A.B.Inline4.A", "B.A.Inline4.A"},
+			}}},
 		},
 		{
 			desc: "cyclic inline - no prefix",
@@ -1606,9 +1606,10 @@ func TestEncoder(t *testing.T) {
 			{
 				desc: "conflicting fields",
 				in:   &Embedded10{},
-				out: [][]string{
-					{"Y"},
-				},
+				err: &FieldConflictError{Conflicts: []FieldConflict{{
+					Column: "X",
+					Paths:  []string{"Embedded11.Embedded6.X", "Embedded12.Embedded6.X"},
+				}}},
 			},
 			{
 				desc: "custom tag",
@@ -1904,7 +1905,7 @@ func TestEncoder(t *testing.T) {
 	t.Run("fail while writing header", func(t *testing.T) {
 		Error := errors.New("error")
 		enc := NewEncoder(failingWriter{Err: Error})
-		if err := enc.EncodeHeader(TypeA{}); err != Error {
+		if err := enc.EncodeHeader(TypeI{}); err != Error {
 			t.Errorf("want %v; got %v", Error, err)
 		}
 	})
@@ -2227,7 +2228,7 @@ func TestEncoder(t *testing.T) {
 			w := csv.NewWriter(&buf)
 			enc := NewEncoder(w)
 			enc.SetHeader([]string{"C", "X", "C", "A", "X", "Z", "A"})
-			enc.Encode(Foo{
+			err := enc.Encode(Foo{
 				A: "a",
 				B: "b",
 				C: "c",
@@ -2235,12 +2236,15 @@ func TestEncoder(t *testing.T) {
 
 			w.Flush()
 
-			expected := encodeCSV(t, [][]string{
-				{"C", "X", "Z", "A"},
-				{"c", "", "", "a"},
-			})
-			if expected != buf.String() {
-				t.Errorf("want=%q; got %q", expected, buf.String())
+			expected := &DuplicateHeaderError{
+				Column:    "C",
+				Positions: []int{1, 3},
+			}
+			if !checkErr(expected, err) {
+				t.Errorf("want err=%v; got %v", expected, err)
+			}
+			if buf.Len() != 0 {
+				t.Errorf("want empty output; got %q", buf.String())
 			}
 		})
 	})

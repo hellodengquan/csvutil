@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 )
 
 // ErrFieldCount is returned when header's length doesn't match the length of
@@ -13,6 +14,50 @@ import (
 //
 // This Error can be disabled with Decoder.AlignRecord = true.
 var ErrFieldCount = errors.New("wrong number of fields in record")
+
+// FieldConflict describes multiple Go struct fields that map to the same CSV
+// column without a stable resolution rule.
+type FieldConflict struct {
+	// Column is the CSV header name for which the fields compete.
+	Column string
+
+	// Paths are the dotted Go struct field paths that map to Column.
+	Paths []string
+}
+
+// FieldConflictError is returned when multiple Go struct fields map to the
+// same CSV column and none of the deterministic priority rules can select a
+// single field.
+type FieldConflictError struct {
+	Conflicts []FieldConflict
+}
+
+func (e *FieldConflictError) Error() string {
+	var b bytes.Buffer
+	b.WriteString("csvutil: ambiguous field mapping:")
+	for _, conflict := range e.Conflicts {
+		fmt.Fprintf(&b, " column %q: %s", conflict.Column, strings.Join(conflict.Paths, ", "))
+	}
+	return b.String()
+}
+
+// DuplicateHeaderError is returned when a CSV header contains the same column
+// name more than once.
+type DuplicateHeaderError struct {
+	// Column is the duplicated header name.
+	Column string
+
+	// Positions are the one-based positions of the duplicated header.
+	Positions []int
+}
+
+func (e *DuplicateHeaderError) Error() string {
+	positions := make([]string, len(e.Positions))
+	for i, position := range e.Positions {
+		positions[i] = strconv.Itoa(position)
+	}
+	return fmt.Sprintf("csvutil: duplicate header %q at positions %s", e.Column, strings.Join(positions, ", "))
+}
 
 // An UnmarshalTypeError describes a string value that was not appropriate for
 // a value of a specific Go type.

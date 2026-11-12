@@ -579,10 +579,13 @@ func TestHeader(t *testing.T) {
 			header: []string{"String", "Int"},
 		},
 		{
-			desc:   "embedded types with conflict",
-			v:      &TypeA{},
-			tag:    "csv",
-			header: []string{"string", "bool", "int"},
+			desc: "embedded types with conflict",
+			v:    &TypeA{},
+			tag:  "csv",
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "float",
+				Paths:  []string{"Embedded1.Float", "Embedded2.Float"},
+			}}},
 		},
 		{
 			desc:   "embedded type with tag",
@@ -699,10 +702,13 @@ func TestHeader(t *testing.T) {
 			header: []string{"Y", "X"},
 		},
 		{
-			desc:   "conflicting fields",
-			v:      &Embedded10{},
-			tag:    "csv",
-			header: []string{"Y"},
+			desc: "conflicting fields",
+			v:    &Embedded10{},
+			tag:  "csv",
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "X",
+				Paths:  []string{"Embedded11.Embedded6.X", "Embedded12.Embedded6.X"},
+			}}},
 		},
 		{
 			desc: "inline - simple",
@@ -723,10 +729,13 @@ func TestHeader(t *testing.T) {
 			},
 		},
 		{
-			desc:   "inline - chain",
-			v:      &Inline5{},
-			tag:    "csv",
-			header: []string{"AS", "AAA", "S", "A"},
+			desc: "inline - chain",
+			v:    &Inline5{},
+			tag:  "csv",
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "AA",
+				Paths:  []string{"A.B.Inline4.A", "B.A.Inline4.A"},
+			}}},
 		},
 		{
 			desc:   "inline - top level",

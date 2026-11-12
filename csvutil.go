@@ -165,9 +165,9 @@ func countRecords(s []byte) (n int) {
 //
 // Tagged fields have the priority over non tagged fields with the same name.
 //
-// Following the Go visibility rules if there are multiple fields with the same
-// name (tagged or not tagged) on the same level and choice between them is
-// ambiguous, then all these fields will be ignored.
+// If multiple fields with the same name cannot be resolved by tag or path
+// depth priority, Header returns a FieldConflictError instead of choosing one
+// field silently.
 //
 // It is a good practice to call Header once for each type. The suitable place
 // for calling it is init function. Look at Decoder.DecodingDataWithNoHeader
@@ -187,7 +187,10 @@ func Header(v any, tag string) ([]string, error) {
 		tag = defaultTag
 	}
 
-	fields := cachedFields(typeKey{tag, typ})
+	fields, err := cachedFields(typeKey{tag, typ})
+	if err != nil {
+		return nil, err
+	}
 	h := make([]string, len(fields))
 	for i, f := range fields {
 		h[i] = f.name

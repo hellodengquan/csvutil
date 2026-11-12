@@ -379,15 +379,10 @@ func TestDecoder(t *testing.T) {
 			desc: "embedded type - no tag - conflicting float tag",
 			in:   "string,int,float,bool\nstring,5,2.5,t",
 			out:  func() any { return &TypeA{} },
-			expected: &TypeA{
-				Embedded1: Embedded1{},
-				Embedded2: Embedded2{Bool: true},
-				String:    "string",
-				Int:       5,
-			},
-			unused:         []int{2},
-			expectedRecord: []string{"string", "5", "2.5", "t"},
-			header:         []string{"string", "int", "float", "bool"},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "float",
+				Paths:  []string{"Embedded1.Float", "Embedded2.Float"},
+			}}},
 		},
 		{
 			desc: "embedded type - with tag",
@@ -767,29 +762,19 @@ string,"{""key"":""value""}"
 			desc: "embedded field conflict #1",
 			in:   "X,Y\n1,2",
 			out:  func() any { return &Embedded5{} },
-			expected: &Embedded5{
-				Embedded8: Embedded8{
-					Embedded9: Embedded9{Y: 2},
-				},
-			},
-			expectedRecord: []string{"1", "2"},
-			header:         []string{"X", "Y"},
-			unused:         []int{0},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "X",
+				Paths:  []string{"Embedded6.X", "Embedded7.X"},
+			}}},
 		},
 		{
 			desc: "embedded field conflict #2",
 			in:   "X,Y\n1,2",
 			out:  func() any { return &Embedded10{} },
-			expected: &Embedded10{
-				Embedded13: Embedded13{
-					Embedded8: Embedded8{
-						Embedded9: Embedded9{Y: 2},
-					},
-				},
-			},
-			expectedRecord: []string{"1", "2"},
-			header:         []string{"X", "Y"},
-			unused:         []int{0},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "X",
+				Paths:  []string{"Embedded11.Embedded6.X", "Embedded12.Embedded6.X"},
+			}}},
 		},
 		{
 			desc:           "circular reference",
@@ -851,23 +836,10 @@ string,"{""key"":""value""}"
 			desc: "inline chain",
 			in:   "AS,AAA,AA,S,A\n1,11,34,2,22",
 			out:  func() any { return &Inline5{} },
-			expected: &Inline5{
-				A: Inline2{
-					S: "1",
-					A: Inline3{
-						Inline4: Inline4{A: "11"},
-					},
-				},
-				B: Inline2{
-					S: "2",
-					B: Inline3{
-						Inline4: Inline4{A: "22"},
-					},
-				},
-			},
-			unused:         []int{2},
-			expectedRecord: []string{"1", "11", "34", "2", "22"},
-			header:         []string{"AS", "AAA", "AA", "S", "A"},
+			err: &FieldConflictError{Conflicts: []FieldConflict{{
+				Column: "AA",
+				Paths:  []string{"A.B.Inline4.A", "B.A.Inline4.A"},
+			}}},
 		},
 		{
 			desc: "cyclic inline - no prefix",
@@ -2479,8 +2451,12 @@ s,1,3.14,true
 			t.Fatalf("want err == nil; got %v", err)
 		}
 
-		if err := dec.NormalizeHeader(strings.ToLower); err == nil {
-			t.Fatal("want err not to be nil")
+		err = dec.NormalizeHeader(strings.ToLower)
+		expected := &DuplicateHeaderError{Column: "string", Positions: []int{1, 2}}
+		var duplicate *DuplicateHeaderError
+		if !errors.As(err, &duplicate) || duplicate.Column != expected.Column ||
+			!reflect.DeepEqual(duplicate.Positions, expected.Positions) {
+			t.Fatalf("want err=%v; got %v", expected, err)
 		}
 	})
 

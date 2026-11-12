@@ -20,7 +20,14 @@ type encCache struct {
 }
 
 func newEncCache(k typeKey, funcMap map[reflect.Type]marshalFunc, funcs []marshalFunc, header []string) (_ *encCache, err error) {
-	fields := cachedFields(k)
+	if err := checkDuplicateHeader(header); err != nil {
+		return nil, err
+	}
+
+	fields, err := cachedFields(k)
+	if err != nil {
+		return nil, err
+	}
 	encFields := make([]encField, 0, len(fields))
 
 	// if header is not empty, we are going to track columns in a set and we will
@@ -72,6 +79,20 @@ func newEncCache(k typeKey, funcMap map[reflect.Type]marshalFunc, funcs []marsha
 		index:  make([]int, len(encFields)),
 		record: make([]string, len(encFields)),
 	}, nil
+}
+
+func checkDuplicateHeader(header []string) error {
+	positions := make(map[string][]int, len(header))
+	for i, name := range header {
+		positions[name] = append(positions[name], i+1)
+	}
+
+	for _, name := range header {
+		if len(positions[name]) > 1 {
+			return &DuplicateHeaderError{Column: name, Positions: positions[name]}
+		}
+	}
+	return nil
 }
 
 // sortEncFields sorts the provided fields according to the given header.
@@ -194,8 +215,8 @@ func (e *Encoder) Register(f any) {
 // encoded in the order of the provided header. If a column specified in the
 // header doesn't exist in the provided type, it will be encoded as an empty
 // column. Fields that are not part of the provided header are ignored.
-// Encoder can't guarantee the right order if the provided header contains
-// duplicate column names.
+// Encode and EncodeHeader return DuplicateHeaderError if the provided header
+// contains duplicate column names.
 //
 // SetHeader must be called before EncodeHeader and/or Encode in order to take
 // effect.
@@ -227,8 +248,7 @@ func (enc *Encoder) WithMarshalers(m *Marshalers) {
 // type's default header. Fields are encoded in the order of the provided header.
 // If a column specified in the header doesn't exist in the provided type, it will
 // be encoded as an empty column. Fields that are not part of the provided header
-// are ignored. Encoder can't guarantee the right order if the provided header
-// contains duplicate column names.
+// are ignored. Duplicate header names produce a DuplicateHeaderError.
 //
 // Header and fields are written in the same order as struct fields are defined.
 // Embedded struct's fields are treated as if they were part of the outer struct.
@@ -240,9 +260,9 @@ func (enc *Encoder) WithMarshalers(m *Marshalers) {
 //
 // Tagged fields have the priority over non tagged fields with the same name.
 //
-// Following the Go visibility rules if there are multiple fields with the same
-// name (tagged or not tagged) on the same level and choice between them is
-// ambiguous, then all these fields will be ignored.
+// If multiple fields with the same name cannot be resolved by tag or path
+// depth priority, Encode returns a FieldConflictError instead of choosing one
+// field silently.
 //
 // Nil values will be encoded as empty strings. Same will happen if 'omitempty'
 // tag is set, and the value is a default value like 0, false or nil interface.
